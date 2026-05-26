@@ -1,0 +1,13 @@
+import yfinance as yf
+from datetime import date, timedelta
+
+def get_market_snapshot(ticker: str):
+    today = date.today()
+    start = today - timedelta(days=30)
+    data = yf.download(ticker, start=start, end=today)
+    latest = data.iloc[-1]
+    return {
+        "ticker": ticker,
+        "price": float(latest["Close"]),
+        "volume": int(latest["Volume"]),
+    }

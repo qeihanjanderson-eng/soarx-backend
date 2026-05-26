@@ -1,0 +1,20 @@
+import os
+import requests
+from datetime import datetime
+
+OXR_API_KEY = os.getenv("OXR_API_KEY")
+OXR_URL = "https://openexchangerates.org/api/latest.json"
+
+def get_fx_rates(base="USD"):
+    params = {
+        "app_id": OXR_API_KEY,
+        "base": base,
+    }
+    resp = requests.get(OXR_URL, params=params)
+    resp.raise_for_status()
+    data = resp.json()
+    return {
+        "timestamp": datetime.fromtimestamp(data["timestamp"]),
+        "base": data["base"],
+        "rates": data["rates"],
+    }
