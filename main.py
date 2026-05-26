@@ -12,15 +12,10 @@ import httpx
 from pydantic import BaseModel
 from uuid import uuid4
 
-from qdrant_client import QdrantClient
-from qdrant_client.models import VectorParams, Distance
-from sentence_transformers import SentenceTransformer
 
 
 def _qdrant_search(self, collection_name: str, query_vector=None, limit: int = 5, **kwargs):
     return self.query_points(collection_name=collection_name, query=query_vector, limit=limit, **kwargs)
-
-QdrantClient.search = _qdrant_search
 
 BASE_DIR = os.path.dirname(__file__)
 ENGINES_DIR = os.path.join(BASE_DIR, "engines")
@@ -94,12 +89,29 @@ def chunk_text(text: str, min_tokens: int = 300, max_tokens: int = 500) -> List[
     return chunks
 
 
+def ensure_qdrant_collection(client):
+    from qdrant_client.models import VectorParams, Distance
+
+    existing = client.get_collections().collections
+    existing_names = [c.name for c in existing]
+    if collection_name not in existing_names:
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+        )
+
+
 def embed_and_store(chunks: List[str], metadata: Dict[str, str]) -> int:
     """Embed text chunks and store vectors in Qdrant with metadata."""
     if not chunks:
         return 0
 
-    vectors = embedder.encode(chunks)
+    from qdrant_client_loader import get_qdrant
+
+    client = get_qdrant()
+    ensure_qdrant_collection(client)
+
+    vectors = get_embedder().encode(chunks)
     points = []
     batch_size = 64
     total_inserted = 0
@@ -112,12 +124,12 @@ def embed_and_store(chunks: List[str], metadata: Dict[str, str]) -> int:
             "payload": payload,
         })
         if len(points) >= batch_size:
-            qdrant.upsert(collection_name=collection_name, points=points)
+            client.upsert(collection_name=collection_name, points=points)
             total_inserted += len(points)
             points.clear()
 
     if points:
-        qdrant.upsert(collection_name=collection_name, points=points)
+        client.upsert(collection_name=collection_name, points=points)
         total_inserted += len(points)
 
     return total_inserted
@@ -229,8 +241,12 @@ def is_client_upload_instruction(instruction: str) -> bool:
 
 
 def get_search_results(instruction: str, source_filter: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
-    query_vector = embedder.encode(instruction).tolist()
-    search_response = qdrant.search(
+    from qdrant_client_loader import get_qdrant
+
+    client = get_qdrant()
+    ensure_qdrant_collection(client)
+    query_vector = get_embedder().encode(instruction).tolist()
+    search_response = client.search(
         collection_name=collection_name,
         query_vector=query_vector,
         limit=limit,
@@ -740,20 +756,17 @@ async def call_llama(prompt: str):
 # ---------------------------
 # Embeddings + Qdrant
 # ---------------------------
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
-
-qdrant = QdrantClient("http://localhost:6333")
-
 collection_name = "soarx_memory"
+embedder = None
 
-existing = qdrant.get_collections().collections
-existing_names = [c.name for c in existing]
 
-if collection_name not in existing_names:
-    qdrant.create_collection(
-        collection_name=collection_name,
-        vectors_config=VectorParams(size=384, distance=Distance.COSINE)
-    )
+def get_embedder():
+    global embedder
+    if embedder is None:
+        from sentence_transformers import SentenceTransformer
+
+        embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    return embedder
 
 
 # ---------------------------
@@ -761,9 +774,13 @@ if collection_name not in existing_names:
 # ---------------------------
 @app.post("/embed")
 async def embed_text(request: EmbedRequest):
-    vector = embedder.encode(request.text).tolist()
+    from qdrant_client_loader import get_qdrant
 
-    qdrant.upsert(
+    client = get_qdrant()
+    ensure_qdrant_collection(client)
+    vector = get_embedder().encode(request.text).tolist()
+
+    client.upsert(
         collection_name=collection_name,
         points=[
             {
@@ -782,9 +799,13 @@ async def embed_text(request: EmbedRequest):
 # ---------------------------
 @app.post("/search")
 async def search_text(request: SearchRequest):
-    query_vector = embedder.encode(request.query).tolist()
+    from qdrant_client_loader import get_qdrant
 
-    results = qdrant.search(
+    client = get_qdrant()
+    ensure_qdrant_collection(client)
+    query_vector = get_embedder().encode(request.query).tolist()
+
+    results = client.search(
         collection_name=collection_name,
         query_vector=query_vector,
         limit=5
