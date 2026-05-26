@@ -1,0 +1,105 @@
+from fastapi import FastAPI
+import httpx
+from pydantic import BaseModel
+from uuid import uuid4
+
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams, Distance
+from sentence_transformers import SentenceTransformer
+
+
+def _qdrant_search(self, collection_name: str, query_vector=None, limit: int = 5, **kwargs):
+    return self.query_points(collection_name=collection_name, query=query_vector, limit=limit, **kwargs)
+
+QdrantClient.search = _qdrant_search
+
+app = FastAPI()
+
+
+class EmbedRequest(BaseModel):
+    text: str
+
+
+class SearchRequest(BaseModel):
+    query: str
+
+
+# ---------------------------
+# Llama endpoint
+# ---------------------------
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL_NAME = "llama3"
+
+@app.post("/llm")
+async def call_llama(prompt: str):
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            OLLAMA_URL,
+            json={"model": MODEL_NAME, "prompt": prompt, "stream": False},
+            timeout=120
+        )
+    data = response.json()
+    return {"response": data.get("response", "")}
+
+
+# ---------------------------
+# Embeddings + Qdrant
+# ---------------------------
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
+
+qdrant = QdrantClient("http://localhost:6333")
+
+collection_name = "soarx_memory"
+
+existing = qdrant.get_collections().collections
+existing_names = [c.name for c in existing]
+
+if collection_name not in existing_names:
+    qdrant.create_collection(
+        collection_name=collection_name,
+        vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+    )
+
+
+# ---------------------------
+# Embed endpoint (FIXED)
+# ---------------------------
+@app.post("/embed")
+async def embed_text(request: EmbedRequest):
+    vector = embedder.encode(request.text).tolist()
+
+    qdrant.upsert(
+        collection_name=collection_name,
+        points=[
+            {
+                "id": str(uuid4()),   # FIXED
+                "vector": vector,
+                "payload": {"text": request.text}
+            }
+        ]
+    )
+
+    return {"status": "stored", "text": request.text}
+
+
+# ---------------------------
+# Search endpoint (FIXED)
+@app.post("/search")
+async def search_text(request: SearchRequest):
+    query_vector = embedder.encode(request.query).tolist()
+
+    results = qdrant.search(
+        collection_name=collection_name,
+        query_vector=query_vector,
+        limit=5
+    )
+
+    return {
+        "matches": [
+            {
+                "score": r.score,
+                "text": r.payload.get("text")
+            }
+            for r in (results.points or [])
+        ]
+    }

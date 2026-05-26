@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+pydantic
+openpyxl
+pandas
+qdrant-client
+sentence-transformers
+httpx
+python-docx
+pdfplumber
+PyPDF2
