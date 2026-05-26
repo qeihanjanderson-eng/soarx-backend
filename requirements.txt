@@ -11,3 +11,6 @@ python-docx
 pdfplumber
 PyPDF2
 requests
+yfinance
+openai
+python-dotenv
