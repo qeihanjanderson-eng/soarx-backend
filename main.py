@@ -618,8 +618,13 @@ def select_sheet_and_fields(instruction: str, workbook_name: str, metadata_resul
     }
 
 
+@app.head("/")
+def head_root():
+    return {"status": "ok"}
+
+
 @app.get("/")
-async def homepage():
+def root():
     return {"status": "SoarX backend running", "version": "1.0"}
 
 
